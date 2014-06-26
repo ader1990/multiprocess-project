@@ -1,300 +1,203 @@
-/*****************************************************
- *
- * S O R algorithm
- * ("Red-Black" solution to LaPlace approximation)
- *
- * sequential version
- *
- *****************************************************/
-
 #include <stdio.h>
 #include <stdlib.h>
+#include <mpi.h>
+#include <stdlib.h>
 #include <math.h>
-#include <malloc.h>
 
-#define MAX_SIZE 4096
-#define EVEN_TURN 0 /* shall we calculate the 'red' or the 'black' elements */
-#define ODD_TURN  1
 
-typedef double matrix[MAX_SIZE+2][MAX_SIZE+2]; /* (+2) - boundary elements */
+#define SIZE 1024	/* assumption: SIZE a multiple of number of nodes */
+#define MAXNUM 15	
+#define DIFFLIMIT 0.00001*SIZE
+#define FROM_MASTER 1	/* setting a message type */
+#define FROM_WORKER 2	/* setting a message type */
+#define DEBUG 0		/* 1 = debug on, 0 = debug off */
 
-volatile struct globmem {
-    int		N;		/* matrix size		*/
-    int		maxnum;		/* max number of element*/
-    char	*Init;		/* matrix init type	*/
-    double	difflimit;	/* stop condition	*/
-    double	w;		/* relaxation factor	*/
-    int		PRINT;		/* print switch		*/
-    matrix	A;		/* matrix A		*/
-} *glob;
+MPI_Status status;
+static double m[SIZE+2][SIZE+2];
 
-/* forward declarations */
-int work();
-void Init_Matrix();
-void Print_Matrix();
-void Init_Default();
-int Read_Options(int, char **);
 
-int 
-main(int argc, char **argv)
+static void
+print_matrix(void)
 {
-    int i, timestart, timeend, iter;
- 
-    glob = (struct globmem *) malloc(sizeof(struct globmem));
+    int i, j;
 
-    Init_Default();		/* Init default values	*/
-    Read_Options(argc,argv);	/* Read arguments	*/
-    Init_Matrix();		/* Init the matrix	*/
-    iter = work();
-    if (glob->PRINT == 1)
-	Print_Matrix();
-    printf("\nNumber of iterations = %d\n", iter);
+    for (i = 0; i < SIZE+2; i++) {
+        for (j = 0; j < SIZE+2; j++)
+	    printf(" %7.2f", m[i][j]);
+	printf("\n");
+    }
+	printf("\n");
 }
 
-int
-work()
+
+static void
+init_matrix(void)
 {
-    double prevmax_even, prevmax_odd, maxi, sum, w;
-    int	m, n, N, i;
-    int finished = 0;
-    int turn = EVEN_TURN;
-    int iteration = 0;
+    int i, j;
 
-    prevmax_even = 0.0;
-    prevmax_odd = 0.0;
-    N = glob->N;
-    w = glob->w;
-    
-    while (!finished) {
-	iteration++;
-	if (turn == EVEN_TURN) {
-	    /* CALCULATE part A - even elements */
-	    for (m = 1; m < N+1; m++) {
-		for (n = 1; n < N+1; n++) {
-		    if (((m + n) % 2) == 0)
-			glob->A[m][n] = (1 - w) * glob->A[m][n] 
-			    + w * (glob->A[m-1][n] + glob->A[m+1][n] 
-				   + glob->A[m][n-1] + glob->A[m][n+1]) / 4;
-		}
-	    }
-	    /* Calculate the maximum sum of the elements */
-	    maxi = -999999.0;
-	    for (m = 1; m < N+1; m++) {
-		sum = 0.0;
-		for (n = 1; n < N+1; n++)
-		    sum += glob->A[m][n];
-		if (sum > maxi)
-		    maxi = sum;
-	    }
-	    /* Compare the sum with the prev sum, i.e., check wether 
-	     * we are finished or not. */
-	    if (fabs(maxi - prevmax_even) <= glob->difflimit)
-		finished = 1;
-	    if ((iteration%100) == 0)
-		printf("Iteration: %d, maxi = %f, prevmax_even = %f\n",
-		       iteration, maxi, prevmax_even);
-	    prevmax_even = maxi;
-	    turn = ODD_TURN;
-
-	} else if (turn == ODD_TURN) {
-	    /* CALCULATE part B - odd elements*/
-	    for (m = 1; m < N+1; m++) {
-		for (n = 1; n < N+1; n++) {
-		    if (((m + n) % 2) == 1)
-			glob->A[m][n] = (1 - w) * glob->A[m][n] 
-			    + w * (glob->A[m-1][n] + glob->A[m+1][n] 
-				   + glob->A[m][n-1] + glob->A[m][n+1]) / 4;
-		}
-	    }
-	    /* Calculate the maximum sum of the elements */
-	    maxi = -999999.0;
-	    for (m = 1; m < N+1; m++) {
-		sum = 0.0;
-		for (n = 1; n < N+1; n++)
-		    sum += glob->A[m][n];	
-		if (sum > maxi)			
-		    maxi = sum;
-	    }
-	    /* Compare the sum with the prev sum, i.e., check wether 
-	     * we are finished or not. */
-	    if (fabs(maxi - prevmax_odd) <= glob->difflimit)
-		finished = 1;
-	    if ((iteration%100) == 0)
-		printf("Iteration: %d, maxi = %f, prevmax_odd = %f\n",
-		       iteration, maxi, prevmax_odd);
-	    prevmax_odd = maxi;
-	    turn = EVEN_TURN;
-	} else {
-	    /* something is very wrong... */
-	    printf("PANIC: Something is really wrong!!!\n");
-	    exit(-1);
+    for (i = 1; i < SIZE+1; i++) {
+        for (j = 1; j < SIZE+1; j++) {
+			m[i][j] = (rand() % MAXNUM) + 1.0;
+        }
 	}
-	if (iteration > 100000) {
-	    /* exit if we don't converge fast enough */
-	    printf("Max number of iterations reached! Exit!\n");
-	    finished = 1;
-	}
-    }
-    return iteration;
-}
-
-/*--------------------------------------------------------------*/
-
-void
-Init_Matrix()
-{
-    int i, j, N, dmmy;
- 
-    N = glob->N;
-    printf("\nsize      = %dx%d ",N,N);
-    printf("\nmaxnum    = %d \n",glob->maxnum);
-    printf("difflimit = %.7lf \n",glob->difflimit);
-    printf("Init	  = %s \n",glob->Init);
-    printf("w	  = %f \n\n",glob->w);
-    printf("Initializing matrix...");
- 
-    /* Initialize all grid elements, including the boundary */
-    for (i = 0; i < glob->N+2; i++) {
-	for (j = 0; j < glob->N+2; j++) {
-	    glob->A[i][j] = 0.0;
-	}
-    }
-    if (strcmp(glob->Init,"count") == 0) {
-	for (i = 1; i < N+1; i++){
-	    for (j = 1; j < N+1; j++) {
-		glob->A[i][j] = (double)i/2;
-	    }
-	}
-    }
-    if (strcmp(glob->Init,"rand") == 0) {
-	for (i = 1; i < N+1; i++){
-	    for (j = 1; j < N+1; j++) {
-		glob->A[i][j] = (rand() % glob->maxnum) + 1.0;
-	    }
-	}
-    }
-    if (strcmp(glob->Init,"fast") == 0) {
-	for (i = 1; i < N+1; i++){
-	    dmmy++;
-	    for (j = 1; j < N+1; j++) {
-		dmmy++;
-		if ((dmmy%2) == 0)
-		    glob->A[i][j] = 1.0;
-		else
-		    glob->A[i][j] = 5.0;
-	    }
-	}
-    }
-
-    /* Set the border to the same values as the outermost rows/columns */
-    /* fix the corners */
-    glob->A[0][0] = glob->A[1][1];
-    glob->A[0][N+1] = glob->A[1][N];
-    glob->A[N+1][0] = glob->A[N][1];
-    glob->A[N+1][N+1] = glob->A[N][N];
+	
+    m[0][0] = m[1][1];
+    m[0][SIZE+1] = m[1][SIZE];
+    m[SIZE+1][0] = m[SIZE][1];
+    m[SIZE+1][SIZE+1] = m[SIZE][SIZE];
     /* fix the top and bottom rows */
-    for (i = 1; i < N+1; i++) {
-	glob->A[0][i] = glob->A[1][i];
-	glob->A[N+1][i] = glob->A[N][i];
+    for (i = 1; i < SIZE+1; i++) {
+		m[0][i] = m[1][i];
+		m[SIZE+1][i] = m[SIZE][i];
     }
     /* fix the left and right columns */
-    for (i = 1; i < N+1; i++) {
-	glob->A[i][0] = glob->A[i][1];
-	glob->A[i][N+1] = glob->A[i][N];
+    for (i = 1; i < SIZE+1; i++) {
+		m[i][0] = m[i][1];
+		m[i][SIZE+1] = m[i][SIZE];
     }
 
     printf("done \n\n");
-    if (glob->PRINT == 1)
-	Print_Matrix();
+	//print_matrix();
 }
 
-void
-Print_Matrix()
-{
-    int i, j, N;
- 
-    N = glob->N;
-    for (i=0; i<N+2 ;i++){
-	for (j=0; j<N+2 ;j++){
-	    printf(" %f",glob->A[i][j]);
-	}
-	printf("\n");
-    }
-    printf("\n\n");
-}
-
-void 
-Init_Default()
-{
-    glob->N = 2048;
-    glob->difflimit = 0.00001*glob->N;
-    glob->Init = "rand";
-    glob->maxnum = 15.0;
-    glob->w = 0.5;
-    glob->PRINT = 0;
-}
- 
 int
-Read_Options(int argc, char **argv)
+main(int argc, char **argv)
 {
-    char    *prog;
- 
-    prog = *argv;
-    while (++argv, --argc > 0)
-	if (**argv == '-')
-	    switch ( *++*argv ) {
-	    case 'n':
-		--argc;
-		glob->N = atoi(*++argv);
-		glob->difflimit = 0.00001*glob->N;
-		break;
-	    case 'h':
-		printf("\nHELP: try sor -u \n\n");
-		exit(0);
-		break;
-	    case 'u':
-		printf("\nUsage: sor [-n problemsize]\n");
-		printf("           [-d difflimit] 0.1-0.000001 \n");
-		printf("           [-D] show default values \n");
-		printf("           [-h] help \n");
-		printf("           [-I init_type] fast/rand/count \n");
-		printf("           [-m maxnum] max random no \n");
-		printf("           [-P print_switch] 0/1 \n");
-		printf("           [-w relaxation_factor] 1.0-0.1 \n\n");
-		exit(0);
-		break;
-	    case 'D':
-		printf("\nDefault:  n         = %d ", glob->N);
-		printf("\n          difflimit = 0.0001 ");
-		printf("\n          Init      = rand" );
-		printf("\n          maxnum    = 5 ");
-		printf("\n          w         = 0.5 \n");
-		printf("\n          P         = 0 \n\n");
-		exit(0);
-		break;
-	    case 'I':
-		--argc;
-		glob->Init = *++argv;
-		break;
-	    case 'm':
-		--argc;
-		glob->maxnum = atoi(*++argv);
-		break;
-	    case 'd':
-		--argc;
-		glob->difflimit = atof(*++argv);
-		break;
-	    case 'w':
-		--argc;
-		glob->w = atof(*++argv);
-		break;
-	    case 'P':
-		--argc;
-		glob->PRINT = atoi(*++argv);
-		break;
-	    default:
-		printf("%s: ignored option: -%s\n", prog, *argv);
-		printf("HELP: try %s -u \n\n", prog);
-		break;
-	    } 
+    int myrank, nproc;
+    int rows; /* amount of work per node (rows per worker) */
+    int mtype; /* message type: send/recv between master and workers */
+    int dest, src, offsetrow;
+    double start_time, end_time;
+    int i, j, k;
+	double largestDiff = -1.00;
+	double largestDiffWorker = -1;
+	int iteration = 0;
+	
+	MPI_Init(&argc, &argv);
+	MPI_Comm_size(MPI_COMM_WORLD, &nproc);
+	MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+	
+	
+	printf("node = %d \n",myrank);
+	
+	offsetrow = rows;
+	do {
+		if (myrank == 0) {
+		
+			iteration++;
+			
+			/* Master task */
+			if (iteration == 1) {
+				printf("SIZE = %d, number of nodes = %d\n", SIZE, nproc);
+				init_matrix();
+				start_time = MPI_Wtime();
+			}
+			rows = SIZE / nproc;
+			/* Send part of matrix a and the whole matrix b to workers */
+			mtype = FROM_MASTER;
+			offsetrow = rows;
+			
+			/* let master do its part of the work */
+
+			for (dest = 1; dest < nproc; dest++) {
+				if (DEBUG)
+					printf("   sending %d rows to task %d\n",rows,dest);
+				MPI_Send(&offsetrow, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
+				MPI_Send(&rows, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
+				MPI_Send(&m[offsetrow][0], (rows+2)*(SIZE+2), MPI_DOUBLE, dest, mtype, MPI_COMM_WORLD);
+
+				offsetrow += rows;
+			}
+			
+			for (i = 1; i < rows+1; i++) {
+
+				for (j = 1; j < SIZE+1; j++) {
+					double tmp = (m[i-1][j]+m[i+1][j]+m[i][j-1]+m[i][j+1])/4;
+
+					if (i == 1 && j == 1) {
+						largestDiffWorker = fabs(tmp - m[i][j]);
+					}
+					if (fabs(tmp - m[i][j])>largestDiffWorker) {
+						largestDiffWorker = fabs(tmp - m[i][j]);
+					}
+					
+					m[i][j] = tmp;
+				}
+			}
+			
+			
+			/* collect the results from all the workers */
+			mtype = FROM_WORKER;
+			for (src = 1; src < nproc; src++) {
+				MPI_Recv(&offsetrow, 1, MPI_INT, src, mtype, MPI_COMM_WORLD, &status);
+				MPI_Recv(&rows, 1, MPI_INT, src, mtype, MPI_COMM_WORLD, &status);
+				MPI_Recv(&m[offsetrow+1][0], rows*(SIZE+2), MPI_DOUBLE, src, mtype, MPI_COMM_WORLD, &status);
+				if (DEBUG)
+				printf("   recvd %d rows from task %d, offset = %d\n",
+					   rows, src, offsetrow);
+			}
+			
+			if (iteration%100 == 0) {
+				printf("____iteration=%d________largestdiff=%7.5f\n",iteration,largestDiff);
+			}
+			//print_matrix();
+		} else {
+		/* Worker tasks */
+		
+			/* Receive data from master */
+			mtype = FROM_MASTER;
+			MPI_Recv(&offsetrow, 1, MPI_INT, 0, mtype, MPI_COMM_WORLD, &status);
+			MPI_Recv(&rows, 1, MPI_INT, 0, mtype, MPI_COMM_WORLD, &status);
+			MPI_Recv(&m[offsetrow][0],(rows+2)*(SIZE+2), MPI_DOUBLE, 0, mtype, MPI_COMM_WORLD, &status);
+			if (DEBUG) 
+				printf ("Rank=%d, offset=%d, row =%d, m[offset][0]=%7.2f\n ",
+					myrank, offsetrow, rows, m[offsetrow][0]);
+			
+			
+			/* do the workers part of the calculation */
+			for (i=offsetrow+1; i<offsetrow+rows+1; i++) {
+
+				for (j=1; j<SIZE+1; j++) {
+
+					double tmp = (m[i-1][j]+m[i+1][j]+m[i][j-1]+m[i][j+1])/4;
+					
+					if (i == offsetrow+1 && j == 1) {
+						largestDiffWorker = fabs(tmp - m[i][j]);
+					}
+					if (fabs(tmp - m[i][j])>largestDiffWorker) {
+						largestDiffWorker = fabs(tmp - m[i][j]);
+					}
+					m[i][j] = tmp;
+
+				}
+			}
+			if (DEBUG)
+				printf ("Rank=%d, offset=%d, row =%d, c[offset][0]=%e, largestDiffWorker=%7.2f\n",
+					myrank, offsetrow, rows, m[offsetrow][0], largestDiffWorker);
+			
+			/* send the results to the master */
+			mtype = FROM_WORKER;
+			MPI_Send(&offsetrow, 1, MPI_INT, 0, mtype, MPI_COMM_WORLD);
+			MPI_Send(&rows, 1, MPI_INT, 0, mtype, MPI_COMM_WORLD);
+			MPI_Send(&m[offsetrow+1][0], rows*(SIZE+2),  MPI_DOUBLE, 0, mtype, MPI_COMM_WORLD);	
+		}
+
+		MPI_Bcast(&iteration,1,MPI_INT,0,MPI_COMM_WORLD);
+		MPI_Allreduce(&largestDiffWorker,&largestDiff,1,MPI_DOUBLE,MPI_MAX,MPI_COMM_WORLD);
+
+
+
+	}while(largestDiff > DIFFLIMIT && iteration < 10000);
+	if (myrank == 0) {
+		end_time = MPI_Wtime();
+		printf("Execution time on %2d nodes: %f\n", nproc, end_time-start_time);
+		//print_matrix();
+	}
+	if (iteration) {
+		printf("___-_iteration=%d____-____largestdiff=%7.2f\n",iteration,largestDiff);
+	}
+	MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Finalize();
+	//print_matrix();
+    return 0;
 }
